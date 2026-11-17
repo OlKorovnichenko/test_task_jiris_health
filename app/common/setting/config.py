@@ -1,4 +1,4 @@
-from pydantic import SecretStr
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import URL
 
@@ -13,6 +13,11 @@ class Config(BaseSettings):
     postgres_db: str
     postgres_user: str
     postgres_password: SecretStr
+    kafka_bootstrap_servers: str = "localhost:9092"
+    kafka_visit_completed_topic: str = "VISIT_COMPLETED_TOPIC"
+    kafka_billing_group: str = "BILLING"
+    outbox_poll_interval: float = Field(default=1.0, gt=0)
+    event_retry_interval: float = Field(default=5.0, gt=0)
 
     @property
     def postgres_url(self) -> URL:
