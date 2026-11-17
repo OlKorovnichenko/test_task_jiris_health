@@ -21,6 +21,8 @@ RUN poetry install --with dev --no-root --no-ansi
 COPY app ./app
 COPY alembic.ini ./
 COPY migrations ./migrations
+COPY scripts ./scripts
+COPY tests ./tests
 
 CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
 

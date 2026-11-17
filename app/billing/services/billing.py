@@ -1,4 +1,4 @@
-from datetime import UTC
+from datetime import UTC, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
 from app.billing.repositories.base import BaseBillingRepository
@@ -15,11 +15,11 @@ class BillingService(BaseBillingService):
         duration = event.end_date_time.astimezone(
             UTC
         ) - event.start_date_time.astimezone(UTC)
-        hours = Decimal(str(duration.total_seconds())) / 3600
+        hours = Decimal(duration // timedelta(microseconds=1)) / Decimal(3_600_000_000)
         return (hours * event.rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
     async def process_visit_completed(self, event: VisitCompleted) -> None:
-        async with self._repository.session.begin():
+        async with self._repository.transaction():
             if not await self._repository.claim_event(event.event_id):
                 return
             amount = self._calculate_amount(event)

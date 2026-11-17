@@ -2,32 +2,53 @@
 
 ## Run
 
-Copy `.env.example` to `.env` if you don't have one, then run:
+Requires Docker and Docker Compose.
 
 ```bash
-docker compose up -d db kafka
-docker compose build
-docker compose run --rm api alembic upgrade head
-docker compose up -d api outbox billing
+cp .env.example .env
+docker compose up --build -d
 ```
 
-## API documentation
+Migrations run automatically. Swagger is available at http://localhost:8000/docs.
+The database starts empty. To add demo visits:
 
-Open [Swagger UI](http://localhost:8000/docs).
+```bash
+docker compose exec api python -m scripts.seed_visits
+```
+
+Complete an In Progress visit with `POST /api/visits/{id}/complete`.
 
 ## Tests
 
-Requires Python 3.14 and Poetry. Create the test database once:
-
 ```bash
-poetry install --with dev --no-root
-docker compose up -d db
-docker compose exec db psql -U postgres -d postgres -c 'CREATE DATABASE jiris_health_test'
+docker compose --profile test run --build --rm tests
 ```
 
-Apply migrations and run the tests:
+This runs pytest against a separate PostgreSQL database. Kafka tests use
+`TestKafkaBroker`, so a running Kafka broker is not needed.
+
+## Migrations
+
+To apply migrations manually and check that they match the models:
 
 ```bash
-POSTGRES_DB=jiris_health_test poetry run alembic upgrade head
-POSTGRES_DB=jiris_health_test poetry run pytest -v
+docker compose exec api alembic upgrade head
+docker compose exec api alembic check
 ```
+
+To roll back the last migration:
+
+```bash
+docker compose exec api alembic downgrade -1
+```
+
+The migration history was cleaned up during development. An existing database
+using the old migrations needs a fresh database or a separate migration plan.
+
+## Architecture
+
+The app is a modular monolith built with FastAPI, PostgreSQL and Kafka.
+Visits and Billing have their own tables and communicate through events.
+Visit completion uses a row lock and saves the event in an outbox in the same
+transaction. A worker retries publication if Kafka is unavailable, and Billing
+deduplicates events and allows only one active bill per visit.

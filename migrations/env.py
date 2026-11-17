@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.billing.models.billing import BillingRecord, ProcessedBillingEvent  # noqa: F401
 from app.common.database.base import BaseTimestampModel
-from app.common.setting.config import settings
+from app.common.setting.config import get_settings
 from app.visits.models.outbox import VisitOutboxEvent  # noqa: F401
 from app.visits.models.visits import Visit  # noqa: F401
 
@@ -21,7 +21,7 @@ target_metadata = BaseTimestampModel.metadata
 
 def run_migrations_offline() -> None:
     context.configure(
-        url=settings.postgres_url,
+        url=get_settings().postgres_url,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
@@ -44,7 +44,7 @@ def run_migrations(connection: Connection) -> None:
 
 
 async def run_migrations_online() -> None:
-    engine = create_async_engine(settings.postgres_url, poolclass=pool.NullPool)
+    engine = create_async_engine(get_settings().postgres_url, poolclass=pool.NullPool)
     try:
         async with engine.connect() as connection:
             await connection.run_sync(run_migrations)

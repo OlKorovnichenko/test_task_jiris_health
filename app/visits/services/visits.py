@@ -1,8 +1,11 @@
 import logging
 
-from fastapi import HTTPException
-
 from app.common.events import VisitCompleted
+from app.visits.exceptions import (
+    InvalidVisitStatusError,
+    VisitCompletionError,
+    VisitNotFoundError,
+)
 from app.visits.repositories.base import BaseVisitRepository
 from app.visits.serializers.visits import VisitResponseSchema
 from app.visits.services.base import BaseVisitService
@@ -17,32 +20,23 @@ class VisitService(BaseVisitService):
 
     async def complete(self, visit_id: int) -> VisitResponseSchema:
         try:
-            return await self._complete(visit_id)
-        except HTTPException:
-            await self._repository.session.rollback()
+            async with self._repository.transaction():
+                return await self._complete(visit_id)
+        except VisitNotFoundError, InvalidVisitStatusError:
             raise
         except Exception as exc:
-            await self._repository.session.rollback()
-            raise HTTPException(
-                status_code=500, detail="Failed to complete visit"
-            ) from exc
+            logger.exception(
+                f"Failed to complete visit {visit_id}",
+            )
+            raise VisitCompletionError("Failed to complete visit") from exc
 
     async def _complete(self, visit_id: int) -> VisitResponseSchema:
-        visit = await self._repository.get_one(visit_id)
+        visit = await self._repository.get_for_update(visit_id)
         if visit is None:
-            raise HTTPException(status_code=404, detail="Visit not found")
+            raise VisitNotFoundError()
 
-        if visit.status == VisitStatus.COMPLETED:
-            raise HTTPException(status_code=400, detail="Visit already completed")
-
-        if visit.status == VisitStatus.CANCELED:
-            raise HTTPException(status_code=400, detail="Visit already cancelled")
-
-        if visit.status == VisitStatus.SCHEDULED:
-            raise HTTPException(status_code=400, detail="Visit not started yet")
-
-        if visit.status == VisitStatus.MISSED:
-            raise HTTPException(status_code=400, detail="Visit already missed")
+        if visit.status != VisitStatus.IN_PROGRESS:
+            raise InvalidVisitStatusError(visit.status)
 
         visit.status = VisitStatus.COMPLETED
         self._repository.add_completed_event(
@@ -53,5 +47,4 @@ class VisitService(BaseVisitService):
                 rate=visit.rate,
             )
         )
-        await self._repository.session.commit()
         return VisitResponseSchema(id=visit.id, status=visit.status)
