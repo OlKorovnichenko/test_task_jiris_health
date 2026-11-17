@@ -23,7 +23,7 @@ async def consume_visit_completed(
     try:
         event = VisitCompleted.model_validate_json(payload)
     except ValidationError:
-        logger.error("Discarding invalid VisitCompleted message")
+        logger.error(f"Discarding invalid VisitCompleted message: {payload[:200]!r}")
         return
 
     try:

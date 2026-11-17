@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 from app.common.events import VisitCompleted
 from app.visits.models.outbox import VisitOutboxEvent
 from app.visits.models.visits import Visit
+from app.visits.repositories.visits import VisitRepository
 from app.visits.utils.enumerations.visit_enums import VisitStatus
 
 
@@ -76,8 +77,6 @@ async def test_database_failure_returns_500_and_rolls_back(
 
     def install_failure(session: AsyncSession) -> None:
         event.listen(session.sync_session, "before_commit", fail_commit, once=True)
-
-    from app.visits.repositories.visits import VisitRepository
 
     original_init = VisitRepository.__init__
 

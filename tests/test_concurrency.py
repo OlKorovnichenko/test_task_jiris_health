@@ -2,6 +2,7 @@ import asyncio
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from decimal import Decimal
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest_asyncio
@@ -18,14 +19,18 @@ from app.common.setting.config import get_settings
 from app.main import app
 from app.visits.models.outbox import VisitOutboxEvent
 from app.visits.models.visits import Visit
+from app.visits.outbox import publish_next
+from app.visits.repositories.outbox import OutboxRepository
+from app.visits.repositories.visits import VisitRepository
+from app.visits.services.visits import VisitService
 from app.visits.utils.enumerations.visit_enums import VisitStatus
+from app.visits.utils.outbox import OutboxClaim
 
 
 @pytest_asyncio.fixture
 async def committed_visit() -> AsyncIterator[
     tuple[async_sessionmaker[AsyncSession], int]
 ]:
-    # Row locks must be tested with independent connections and real commits.
     engine = create_async_engine(get_settings().postgres_url)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     async with factory.begin() as session:
@@ -174,12 +179,6 @@ async def test_concurrent_distinct_events_still_create_one_bill(
 async def test_concurrent_outbox_workers_publish_only_the_claimed_event(
     committed_visit: tuple[async_sessionmaker[AsyncSession], int],
 ) -> None:
-    from unittest.mock import AsyncMock
-
-    from app.visits.outbox import publish_next
-    from app.visits.repositories.visits import VisitRepository
-    from app.visits.services.visits import VisitService
-
     factory, visit_id = committed_visit
     async with factory() as session:
         await VisitService(VisitRepository(session)).complete(visit_id)
@@ -196,13 +195,12 @@ async def test_concurrent_outbox_workers_publish_only_the_claimed_event(
 
     async def run_first() -> bool:
         async with factory() as session:
-            return await publish_next(session, publisher)
+            return await publish_next(OutboxRepository(session), publisher)
 
     first = asyncio.create_task(run_first())
     try:
         await asyncio.wait_for(publishing.wait(), timeout=5)
         async with factory() as session:
-            # The row lock is already released while Kafka publication is pending.
             async with session.begin():
                 assert (
                     await session.scalar(
@@ -212,7 +210,7 @@ async def test_concurrent_outbox_workers_publish_only_the_claimed_event(
                     )
                     is not None
                 )
-            assert not await publish_next(session, publisher)
+            assert not await publish_next(OutboxRepository(session), publisher)
         release.set()
         assert await asyncio.wait_for(first, timeout=5)
         publisher.publish_completed.assert_awaited_once()
@@ -221,3 +219,34 @@ async def test_concurrent_outbox_workers_publish_only_the_claimed_event(
         if not first.done():
             first.cancel()
         await asyncio.gather(first, return_exceptions=True)
+
+
+async def test_concurrent_outbox_claims_have_one_owner(
+    committed_visit: tuple[async_sessionmaker[AsyncSession], int],
+) -> None:
+    factory, visit_id = committed_visit
+    async with factory() as session:
+        await VisitService(VisitRepository(session)).complete(visit_id)
+
+    ready = asyncio.Barrier(2)
+
+    async def claim() -> OutboxClaim | None:
+        async with factory() as session:
+            await ready.wait()
+            return await OutboxRepository(session).claim_next_pending()
+
+    results = await asyncio.wait_for(asyncio.gather(claim(), claim()), timeout=10)
+    claims = [result for result in results if result is not None]
+    assert len(claims) == 1
+    owner = claims[0]
+    assert VisitCompleted.model_validate(owner.payload).visit_id == visit_id
+
+    async with factory() as session:
+        event = await session.scalar(
+            select(VisitOutboxEvent).where(VisitOutboxEvent.visit_id == visit_id)
+        )
+        assert event is not None
+        assert event.event_id == owner.event_id
+        assert event.claim_token == owner.token
+        assert event.claimed_until is not None
+        assert event.claimed_until > datetime.now(UTC)

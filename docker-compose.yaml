@@ -4,7 +4,7 @@ x-app: &app
     target: dev
   env_file:
     - .env
-  environment: &app_environment
+  environment:
     POSTGRES_HOST: db
     POSTGRES_PORT: 5432
     KAFKA_BOOTSTRAP_SERVERS: kafka:9092
@@ -18,16 +18,9 @@ services:
         condition: service_healthy
 
   api:
-    build:
-      context: .
-      target: dev
+    <<: *app
     ports:
       - "8000:8000"
-    env_file:
-      - .env
-    environment:
-      POSTGRES_HOST: db
-      POSTGRES_PORT: 5432
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -39,17 +32,9 @@ services:
       - ./scripts:/app/scripts
 
   outbox:
-    build:
-      context: .
-      target: dev
+    <<: *app
     command: ["python", "-m", "app.visits.outbox"]
     restart: unless-stopped
-    env_file:
-      - .env
-    environment: &worker_environment
-      POSTGRES_HOST: db
-      POSTGRES_PORT: 5432
-      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -59,14 +44,9 @@ services:
       - ./app:/app/app
 
   billing:
-    build:
-      context: .
-      target: dev
+    <<: *app
     command: ["python", "-m", "app.billing.worker"]
     restart: unless-stopped
-    env_file:
-      - .env
-    environment: *worker_environment
     depends_on:
       migrate:
         condition: service_completed_successfully

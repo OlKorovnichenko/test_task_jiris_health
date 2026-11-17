@@ -31,8 +31,12 @@ FROM base AS prod
 
 RUN poetry install --only main --no-root --no-ansi
 
+RUN groupadd --system appuser && useradd --system --gid appuser --create-home appuser
+
 COPY app ./app
 COPY alembic.ini ./
 COPY migrations ./migrations
+
+USER appuser
 
 CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
