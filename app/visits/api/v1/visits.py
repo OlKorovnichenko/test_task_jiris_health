@@ -3,7 +3,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, status
 from punq import Container
 
-from app.containers.container import init_container
+from app.common.containers.container import init_container
 from app.visits.serializers.visits import VisitResponseSchema
 from app.visits.services.base import BaseVisitService
 

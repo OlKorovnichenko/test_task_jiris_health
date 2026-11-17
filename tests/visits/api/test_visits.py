@@ -1,8 +1,13 @@
+from unittest.mock import AsyncMock
+
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
+from app.common.events import VisitCompleted
+from app.visits.models.outbox import VisitOutboxEvent
 from app.visits.models.visits import Visit
 from app.visits.utils.enumerations.visit_enums import VisitStatus
 
@@ -16,6 +21,12 @@ async def test_complete_visit(
     assert response.json() == {"id": 2, "status": "Completed"}
     status = await db_connection.scalar(select(Visit.status).where(Visit.id == 2))
     assert status == VisitStatus.COMPLETED
+    payload = await db_connection.scalar(
+        select(VisitOutboxEvent.payload).where(VisitOutboxEvent.visit_id == 2)
+    )
+    event = VisitCompleted.model_validate(payload)
+    assert event.visit_id == 2
+    assert event.rate == 200
 
 
 @pytest.mark.parametrize(
@@ -48,6 +59,31 @@ async def test_missing_visit(client: AsyncClient) -> None:
 
     assert response.status_code == 404
     assert response.json() == {"detail": "Visit not found"}
+
+
+async def test_database_failure_returns_500_and_rolls_back(
+    client: AsyncClient,
+    db_connection: AsyncConnection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        AsyncSession, "commit", AsyncMock(side_effect=SQLAlchemyError("Commit failed"))
+    )
+
+    response = await client.post("/api/visits/2/complete")
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "Failed to complete visit"}
+    assert (
+        await db_connection.scalar(select(Visit.status).where(Visit.id == 2))
+        == VisitStatus.IN_PROGRESS
+    )
+    assert (
+        await db_connection.scalar(
+            select(VisitOutboxEvent.event_id).where(VisitOutboxEvent.visit_id == 2)
+        )
+        is None
+    )
 
 
 async def test_invalid_visit_id(client: AsyncClient) -> None:
