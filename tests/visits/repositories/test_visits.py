@@ -6,39 +6,48 @@ from app.visits.repositories.visits import VisitRepository
 from app.visits.utils.enumerations.visit_enums import VisitStatus
 
 
-async def test_get_one_returns_visit(db_session: AsyncSession) -> None:
+async def test_get_for_update_returns_visit(
+    db_session: AsyncSession, visits: dict[VisitStatus, int]
+) -> None:
     repository = VisitRepository(db_session)
 
-    visit = await repository.get_one(2)
+    visit = await repository.get_for_update(visits[VisitStatus.IN_PROGRESS])
 
     assert isinstance(visit, Visit)
-    assert visit.id == 2
+    assert visit.id == visits[VisitStatus.IN_PROGRESS]
     assert visit.status == VisitStatus.IN_PROGRESS
-    assert await db_session.get(Visit, 2) is visit
-    assert repository.session is db_session
+    assert await db_session.get(Visit, visits[VisitStatus.IN_PROGRESS]) is visit
 
 
-async def test_get_one_returns_none_for_missing_visit(db_session: AsyncSession) -> None:
+async def test_get_for_update_returns_none_for_missing_visit(
+    db_session: AsyncSession, visits: dict[VisitStatus, int]
+) -> None:
     repository = VisitRepository(db_session)
 
-    assert await repository.get_one(999999) is None
+    assert await repository.get_for_update(999999) is None
 
 
 async def test_loaded_visit_changes_are_tracked(
-    db_session: AsyncSession, db_connection: AsyncConnection
+    db_session: AsyncSession,
+    db_connection: AsyncConnection,
+    visits: dict[VisitStatus, int],
 ) -> None:
     repository = VisitRepository(db_session)
-    visit = await repository.get_one(2)
+    visit = await repository.get_for_update(visits[VisitStatus.IN_PROGRESS])
     assert visit is not None
 
     visit.status = VisitStatus.COMPLETED
-    await repository.session.commit()
+    await db_session.commit()
 
-    status = await db_connection.scalar(select(Visit.status).where(Visit.id == 2))
+    status = await db_connection.scalar(
+        select(Visit.status).where(Visit.id == visits[VisitStatus.IN_PROGRESS])
+    )
     assert status == VisitStatus.COMPLETED
 
 
-async def test_get_one_leaves_transaction_to_caller(db_session: AsyncSession) -> None:
-    await VisitRepository(db_session).get_one(2)
+async def test_get_for_update_leaves_transaction_to_caller(
+    db_session: AsyncSession, visits: dict[VisitStatus, int]
+) -> None:
+    await VisitRepository(db_session).get_for_update(visits[VisitStatus.IN_PROGRESS])
 
     assert db_session.in_transaction()

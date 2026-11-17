@@ -157,16 +157,48 @@ async def test_replaying_processed_event_does_not_recreate_reversed_record(
     )
 
 
-@pytest.mark.parametrize("status", [BillingStatus.CREATED, BillingStatus.REVERSED])
-async def test_database_enforces_one_record_per_visit(
-    db_session: AsyncSession, status: BillingStatus
+async def test_database_enforces_one_active_record_per_visit(
+    db_session: AsyncSession,
 ) -> None:
     db_session.add(BillingRecord(visit_id=987654, amount=Decimal("10.00")))
     await db_session.commit()
 
     with pytest.raises(IntegrityError):
         async with db_session.begin_nested():
-            db_session.add(
-                BillingRecord(visit_id=987654, amount=Decimal("20.00"), status=status)
-            )
+            db_session.add(BillingRecord(visit_id=987654, amount=Decimal("20.00")))
+            await db_session.flush()
+
+
+async def test_reversed_records_allow_a_new_active_bill(
+    db_session: AsyncSession, event: VisitCompleted
+) -> None:
+    service = BillingService(BillingRepository(db_session))
+    await service.process_visit_completed(event)
+    await db_session.execute(
+        update(BillingRecord)
+        .where(BillingRecord.visit_id == event.visit_id)
+        .values(status=BillingStatus.REVERSED)
+    )
+    await db_session.commit()
+
+    # Replaying the original event is still deduplicated; a new event may bill again.
+    await service.process_visit_completed(event)
+    await service.process_visit_completed(
+        event.model_copy(update={"event_id": uuid4()})
+    )
+    records = (
+        await db_session.scalars(
+            select(BillingRecord).where(BillingRecord.visit_id == event.visit_id)
+        )
+    ).all()
+    assert sorted(record.status for record in records) == [
+        BillingStatus.CREATED,
+        BillingStatus.REVERSED,
+    ]
+
+
+async def test_database_rejects_negative_amount(db_session: AsyncSession) -> None:
+    with pytest.raises(IntegrityError):
+        async with db_session.begin_nested():
+            db_session.add(BillingRecord(visit_id=987654, amount=Decimal("-0.01")))
             await db_session.flush()

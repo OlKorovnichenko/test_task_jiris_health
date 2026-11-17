@@ -2,7 +2,6 @@ from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.billing.models.billing import (
     BillingRecord,
@@ -10,16 +9,10 @@ from app.billing.models.billing import (
 )
 from app.billing.repositories.base import BaseBillingRepository
 from app.billing.utils.enumerations.billing_enums import BillingStatus
+from app.common.database.transactions import SQLAlchemyRepository
 
 
-class BillingRepository(BaseBillingRepository):
-    def __init__(self, session: AsyncSession) -> None:
-        self._session = session
-
-    @property
-    def session(self) -> AsyncSession:
-        return self._session
-
+class BillingRepository(SQLAlchemyRepository, BaseBillingRepository):
     async def claim_event(self, event_id: UUID) -> bool:
         bill_event = (
             insert(ProcessedBillingEvent)
@@ -33,6 +26,9 @@ class BillingRepository(BaseBillingRepository):
         bill = (
             insert(BillingRecord)
             .values(visit_id=visit_id, amount=amount, status=BillingStatus.CREATED)
-            .on_conflict_do_nothing(index_elements=[BillingRecord.visit_id])
+            .on_conflict_do_nothing(
+                index_elements=[BillingRecord.visit_id],
+                index_where=BillingRecord.status == BillingStatus.CREATED,
+            )
         )
         await self._session.execute(bill)

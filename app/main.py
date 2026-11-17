@@ -3,8 +3,8 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.common.database.session import engine
-from app.visits.api.v1.visits import router as visits_router
+from app.common.database.session import dispose_database
+from app.visits.api.visits import router as visits_router
 
 
 @asynccontextmanager
@@ -12,7 +12,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
-        await engine.dispose()
+        await dispose_database()
 
 
 app = FastAPI(

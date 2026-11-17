@@ -1,3 +1,5 @@
+from functools import lru_cache
+
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import URL
@@ -14,8 +16,8 @@ class Config(BaseSettings):
     postgres_user: str
     postgres_password: SecretStr
     kafka_bootstrap_servers: str = "localhost:9092"
-    kafka_visit_completed_topic: str = "VISIT_COMPLETED_TOPIC"
-    kafka_billing_group: str = "BILLING"
+    kafka_visit_completed_topic: str = "visits.completed.v1"
+    kafka_billing_group: str = "billing-v1"
     outbox_poll_interval: float = Field(default=1.0, gt=0)
     event_retry_interval: float = Field(default=5.0, gt=0)
 
@@ -31,4 +33,6 @@ class Config(BaseSettings):
         )
 
 
-settings = Config()
+@lru_cache
+def get_settings() -> Config:
+    return Config()

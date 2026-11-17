@@ -1,4 +1,6 @@
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
+from decimal import Decimal
 
 import pytest
 import pytest_asyncio
@@ -11,13 +13,15 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from app.common.database.session import get_session
-from app.common.setting.config import settings
+from app.common.setting.config import get_settings
 from app.main import app
+from app.visits.models.visits import Visit
+from app.visits.utils.enumerations.visit_enums import VisitStatus
 
 
 @pytest_asyncio.fixture
 async def db_connection() -> AsyncIterator[AsyncConnection]:
-    engine = create_async_engine(settings.postgres_url)
+    engine = create_async_engine(get_settings().postgres_url)
     try:
         async with engine.connect() as connection:
             transaction = await connection.begin()
@@ -70,3 +74,27 @@ async def client(
     finally:
         app.dependency_overrides.clear()
         app.dependency_overrides.update(previous_overrides)
+
+
+@pytest_asyncio.fixture
+async def visits(db_connection: AsyncConnection) -> dict[VisitStatus, int]:
+    # Create each test's data, without fixed IDs or migration seed data.
+    factory = async_sessionmaker(
+        bind=db_connection,
+        expire_on_commit=False,
+        join_transaction_mode="create_savepoint",
+    )
+    async with factory.begin() as session:
+        rows = [
+            Visit(
+                start_date_time=datetime(2026, 11, 16, 9, tzinfo=UTC),
+                end_date_time=datetime(2026, 11, 16, 10, 30, tzinfo=UTC),
+                description=f"Test visit: {status.value}",
+                rate=Decimal("200.00"),
+                status=status,
+            )
+            for status in VisitStatus
+        ]
+        session.add_all(rows)
+        await session.flush()
+        return {row.status: row.id for row in rows}

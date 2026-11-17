@@ -2,14 +2,10 @@ from abc import ABC, abstractmethod
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy.ext.asyncio import AsyncSession
+from app.common.database.transactions import TransactionalRepository
 
 
-class BaseBillingRepository(ABC):
-    @property
-    @abstractmethod
-    def session(self) -> AsyncSession: ...
-
+class BaseBillingRepository(TransactionalRepository, ABC):
     @abstractmethod
     async def claim_event(self, event_id: UUID) -> bool: ...
 

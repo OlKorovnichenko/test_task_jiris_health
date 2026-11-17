@@ -14,7 +14,7 @@ from app.billing.repositories.billing import BillingRepository
 from app.billing.services.billing import BillingService
 from app.common.database.session import get_session
 from app.common.events import VisitCompleted
-from app.common.setting.config import settings
+from app.common.setting.config import get_settings
 from app.main import app
 from app.visits.models.outbox import VisitOutboxEvent
 from app.visits.models.visits import Visit
@@ -26,7 +26,7 @@ async def committed_visit() -> AsyncIterator[
     tuple[async_sessionmaker[AsyncSession], int]
 ]:
     # Row locks must be tested with independent connections and real commits.
-    engine = create_async_engine(settings.postgres_url)
+    engine = create_async_engine(get_settings().postgres_url)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     async with factory.begin() as session:
         visit = Visit(
@@ -89,7 +89,7 @@ async def test_two_concurrent_complete_requests_create_one_event_and_bill(
                 ),
                 timeout=10,
             )
-        assert sorted(response.status_code for response in responses) == [200, 400]
+        assert sorted(response.status_code for response in responses) == [200, 409]
         assert sessions[0] is not sessions[1]
     finally:
         app.dependency_overrides.clear()
@@ -169,3 +169,55 @@ async def test_concurrent_distinct_events_still_create_one_bill(
                     ProcessedBillingEvent.event_id.in_(event_ids)
                 )
             )
+
+
+async def test_concurrent_outbox_workers_publish_only_the_claimed_event(
+    committed_visit: tuple[async_sessionmaker[AsyncSession], int],
+) -> None:
+    from unittest.mock import AsyncMock
+
+    from app.visits.outbox import publish_next
+    from app.visits.repositories.visits import VisitRepository
+    from app.visits.services.visits import VisitService
+
+    factory, visit_id = committed_visit
+    async with factory() as session:
+        await VisitService(VisitRepository(session)).complete(visit_id)
+
+    publishing = asyncio.Event()
+    release = asyncio.Event()
+
+    async def publish(event: VisitCompleted) -> None:
+        publishing.set()
+        await asyncio.wait_for(release.wait(), timeout=5)
+
+    publisher = AsyncMock()
+    publisher.publish_completed.side_effect = publish
+
+    async def run_first() -> bool:
+        async with factory() as session:
+            return await publish_next(session, publisher)
+
+    first = asyncio.create_task(run_first())
+    try:
+        await asyncio.wait_for(publishing.wait(), timeout=5)
+        async with factory() as session:
+            # The row lock is already released while Kafka publication is pending.
+            async with session.begin():
+                assert (
+                    await session.scalar(
+                        select(VisitOutboxEvent)
+                        .where(VisitOutboxEvent.visit_id == visit_id)
+                        .with_for_update(nowait=True)
+                    )
+                    is not None
+                )
+            assert not await publish_next(session, publisher)
+        release.set()
+        assert await asyncio.wait_for(first, timeout=5)
+        publisher.publish_completed.assert_awaited_once()
+    finally:
+        release.set()
+        if not first.done():
+            first.cancel()
+        await asyncio.gather(first, return_exceptions=True)
