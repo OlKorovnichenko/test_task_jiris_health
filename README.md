@@ -42,9 +42,6 @@ To roll back the last migration:
 docker compose exec api alembic downgrade -1
 ```
 
-The migration history was cleaned up during development. An existing database
-using the old migrations needs a fresh database or a separate migration plan.
-
 ## Architecture
 
 The app is a modular monolith built with FastAPI, PostgreSQL and Kafka.

@@ -1,17 +1,15 @@
 import asyncio
 import logging
-from datetime import UTC, datetime, timedelta
 from typing import Protocol
-from uuid import uuid4
 
 from faststream.kafka import KafkaBroker
-from sqlalchemy import or_, select, update
-from sqlalchemy.ext.asyncio import AsyncSession
+from pydantic import ValidationError
 
 from app.common.database.session import dispose_database, get_database
 from app.common.events import VisitCompleted
 from app.common.setting.config import get_settings
-from app.visits.models.outbox import VisitOutboxEvent
+from app.visits.repositories.base import BaseOutboxRepository
+from app.visits.repositories.outbox import OutboxRepository
 
 logger = logging.getLogger(__name__)
 
@@ -34,49 +32,32 @@ class KafkaEventPublisher:
         )
 
 
-async def publish_next(session: AsyncSession, publisher: EventPublisher) -> bool:
-    token = uuid4()
-    now = datetime.now(UTC)
-    async with session.begin():
-        event = await session.scalar(
-            select(VisitOutboxEvent)
-            .where(
-                VisitOutboxEvent.published_at.is_(None),
-                or_(
-                    VisitOutboxEvent.claimed_until.is_(None),
-                    VisitOutboxEvent.claimed_until <= now,
-                ),
-            )
-            .order_by(VisitOutboxEvent.created_at, VisitOutboxEvent.event_id)
-            .limit(1)
-            .with_for_update(skip_locked=True)
+async def publish_next(
+    repository: BaseOutboxRepository, publisher: EventPublisher
+) -> bool:
+    claim = await repository.claim_next_pending()
+    if claim is None:
+        return False
+    try:
+        event = VisitCompleted.model_validate(claim.payload)
+    except ValidationError:
+        logger.exception(
+            f"Invalid outbox payload for event {claim.event_id}; retry after lease expiry"
         )
-        if event is None:
-            return False
-        event.claim_token = token
-        event.claimed_until = now + timedelta(seconds=30)
-        event_id, payload = event.event_id, event.payload
+        return True
 
-    owned_event = update(VisitOutboxEvent).where(
-        VisitOutboxEvent.event_id == event_id,
-        VisitOutboxEvent.claim_token == token,
-        VisitOutboxEvent.published_at.is_(None),
-    )
     try:
         await asyncio.wait_for(
-            publisher.publish_completed(VisitCompleted.model_validate(payload)),
+            publisher.publish_completed(event),
             timeout=10,
         )
-        async with session.begin():
-            await session.execute(
-                owned_event.values(
-                    published_at=datetime.now(UTC), claim_token=None, claimed_until=None
-                )
-            )
+        await repository.mark_published(claim)
     except Exception:
-        async with session.begin():
-            await session.execute(
-                owned_event.values(claim_token=None, claimed_until=None)
+        try:
+            await repository.release_claim(claim)
+        except Exception:
+            logger.warning(
+                f"Failed to release outbox claim for {claim.event_id}", exc_info=True
             )
         raise
     return True
@@ -99,8 +80,10 @@ async def run() -> None:
                     )
                     while True:
                         async with session_factory() as session:
-                            published = await publish_next(session, publisher)
-                        if not published:
+                            handled = await publish_next(
+                                OutboxRepository(session), publisher
+                            )
+                        if not handled:
                             await asyncio.sleep(settings.outbox_poll_interval)
             except Exception:
                 logger.exception("Outbox publication failed; retrying automatically")

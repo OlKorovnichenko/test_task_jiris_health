@@ -25,9 +25,7 @@ class VisitService(BaseVisitService):
         except VisitNotFoundError, InvalidVisitStatusError:
             raise
         except Exception as exc:
-            logger.exception(
-                f"Failed to complete visit {visit_id}",
-            )
+            logger.exception(f"Failed to complete visit {visit_id}")
             raise VisitCompletionError("Failed to complete visit") from exc
 
     async def _complete(self, visit_id: int) -> VisitResponseSchema:

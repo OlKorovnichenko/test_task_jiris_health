@@ -95,6 +95,8 @@ async def test_invalid_messages_do_not_block_the_next_valid_event(
         await KafkaEventPublisher(broker).publish_completed(completed_event)
 
     assert "Discarding invalid VisitCompleted message" in caplog.text
+    assert repr(payload[:200]) in caplog.text
+    assert "type" in caplog.text
     assert (
         await db_connection.scalar(select(func.count()).select_from(BillingRecord)) == 1
     )
@@ -119,3 +121,17 @@ async def test_processing_failure_waits_before_retry(
         )
 
     sleep.assert_awaited_once_with(5)
+
+
+async def test_invalid_message_log_limits_payload_preview(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    service = create_autospec(BaseBillingService, instance=True)
+    payload = b'{"visit_id": "' + b"x" * 1000 + b'UNLOGGED_SUFFIX"}'
+
+    await consume_visit_completed(payload, cast(BaseBillingService, service), 5)
+
+    assert repr(payload[:200]) in caplog.text
+    assert "int_parsing" in caplog.text
+    assert "UNLOGGED_SUFFIX" not in caplog.text
+    service.process_visit_completed.assert_not_awaited()

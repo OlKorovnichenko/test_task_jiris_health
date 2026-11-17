@@ -78,7 +78,7 @@ async def client(
 
 @pytest_asyncio.fixture
 async def visits(db_connection: AsyncConnection) -> dict[VisitStatus, int]:
-    # Create each test's data, without fixed IDs or migration seed data.
+
     factory = async_sessionmaker(
         bind=db_connection,
         expire_on_commit=False,

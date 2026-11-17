@@ -111,7 +111,7 @@ async def test_failed_processing_can_be_retried(
 async def test_negative_amount_rolls_back_billing_and_event(
     db_session: AsyncSession, event: VisitCompleted
 ) -> None:
-    # Bypass event deserialization to verify service validation independently.
+
     invalid_event = event.model_copy(update={"rate": Decimal("-200.00")})
     service = BillingService(BillingRepository(db_session))
 
@@ -181,7 +181,6 @@ async def test_reversed_records_allow_a_new_active_bill(
     )
     await db_session.commit()
 
-    # Replaying the original event is still deduplicated; a new event may bill again.
     await service.process_visit_completed(event)
     await service.process_visit_completed(
         event.model_copy(update={"event_id": uuid4()})

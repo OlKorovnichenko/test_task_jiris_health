@@ -5,11 +5,11 @@ from alembic import context
 from sqlalchemy import Connection, pool
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from app.billing.models.billing import BillingRecord, ProcessedBillingEvent  # noqa: F401
+from app.billing.models.billing import BillingRecord, ProcessedBillingEvent
 from app.common.database.base import BaseTimestampModel
 from app.common.setting.config import get_settings
-from app.visits.models.outbox import VisitOutboxEvent  # noqa: F401
-from app.visits.models.visits import Visit  # noqa: F401
+from app.visits.models.outbox import VisitOutboxEvent
+from app.visits.models.visits import Visit
 
 config = context.config
 
